@@ -87,15 +87,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if Path(args.dump_dir).exists() and not args.resume:
+    if Path(args.dump_dir).exists() and any(Path(args.dump_dir).iterdir()) and not args.resume:
         raise ValueError("The dump directory already exists.")
 
-    checkpoint_dir = Path(args.dump_dir) / "checkpoints"
-    checkpoint_dir.mkdir(exist_ok=True, parents=True)
-    (Path(args.dump_dir) / "gen").mkdir(exist_ok=True, parents=True)
     accelerator = Accelerator(mixed_precision=args.mixed_precision, log_with="tensorboard", project_dir=args.dump_dir)
     device = accelerator.device
     accelerator.init_trackers("tb", config=vars(args))
+    accelerator.wait_for_everyone()
+    checkpoint_dir = Path(args.dump_dir) / "checkpoints"
+    checkpoint_dir.mkdir(exist_ok=True, parents=True)
+    (Path(args.dump_dir) / "gen").mkdir(exist_ok=True, parents=True)
 
     N = 256
     max_length = 512
