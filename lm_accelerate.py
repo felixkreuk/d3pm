@@ -6,6 +6,7 @@ from pathlib import Path
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader, Dataset
+from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 from transformers import get_scheduler
 
@@ -61,6 +62,7 @@ if __name__ == "__main__":
     parser.add_argument("--dump_dir", type=str, required=True)
     parser.add_argument("--eval_freq", type=int, default=600)
     parser.add_argument("--ckpt_freq", type=int, default=600)
+    parser.add_argument("--log_steps", type=int, default=10)
     parser.add_argument(
         "--mixed_precision",
         type=str,
@@ -83,6 +85,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    if Path(args.dump_dir).exists() and not args.resume:
+        raise ValueError("The dump directory already exists.")
+
     checkpoint_dir = Path(args.dump_dir) / "checkpoints"
     log_dir = Path(args.dump_dir) / "logdir"
     accelerator = Accelerator(mixed_precision=args.mixed_precision, log_with="tensorboard", project_dir=args.dump_dir)
@@ -96,7 +101,7 @@ if __name__ == "__main__":
         DDiT_Llama(N, dim=512, n_layers=6), 1000, num_classes=N, hybrid_loss_coeff=0.0
     )
 
-    print(f"Total Param Count: {sum([p.numel() for p in d3pm.x0_model.parameters()])}")
+    accelerator.print(f"Total Param Count: {sum([p.numel() for p in d3pm.x0_model.parameters()])}")
     dataset = WikiTextDataset(max_length=max_length, debug=False)
     dataloader = DataLoader(dataset, batch_size=256, shuffle=True, num_workers=8)
     optim = torch.optim.AdamW(d3pm.x0_model.parameters(), lr=2e-4)
@@ -126,7 +131,7 @@ if __name__ == "__main__":
             resume_step -= start_epoch * len(dataloader)
             global_step = resume_step
             accelerator.load_state(path)
-            accelerator.print("loaded ctkp from: {path}")
+            accelerator.print(f"loaded ctkp from: {path}")
     accelerator.print(f"step: {global_step}, epoch: {start_epoch}")
 
     d3pm.train()
@@ -141,9 +146,9 @@ if __name__ == "__main__":
             # After the first iteration though, we need to go back to the original dataloader
             active_dataloader = dataloader
 
-        pbar = tqdm(active_dataloader, total=len(dataloader), initial=resume_step)
+        # pbar = tqdm(active_dataloader, total=len(dataloader), initial=resume_step or 0)
         loss_ema = None
-        for x in pbar:
+        for x in active_dataloader:
             optim.zero_grad()
             x = x["input_ids"].to(device)
 
@@ -152,19 +157,22 @@ if __name__ == "__main__":
             loss, info = d3pm(x)
 
             accelerator.backward(loss)
-            norm = torch.nn.utils.clip_grad_norm_(d3pm.x0_model.parameters(), 5.0)
+            if isinstance(d3pm, DDP):
+                x0_model = d3pm.module.x0_model
+            else:
+                x0_model = d3pm.x0_model
+            norm = accelerator.clip_grad_norm_(x0_model.parameters(), 5.0)
 
             with torch.no_grad():
-                param_norm = sum([torch.norm(p) for p in d3pm.x0_model.parameters()])
+                param_norm = sum([torch.norm(p) for p in x0_model.parameters()])
 
             if loss_ema is None:
                 loss_ema = loss.item()
             else:
                 loss_ema = 0.99 * loss_ema + 0.01 * loss.item()
 
-            pbar.set_description(
-                f"loss: {loss_ema:.4f}, norm: {norm:.4f}, param_norm: {param_norm:.4f}, vb_loss: {info['vb_loss']:.4f}, ce_loss: {info['ce_loss']:.4f}"
-            )
+            if global_step % args.log_steps == 0:
+                accelerator.print(f"epoch: {i}, step: {global_step}, loss: {loss_ema:.4f}, norm: {norm:.4f}, param_norm: {param_norm:.4f}, vb_loss: {info['vb_loss']:.4f}, ce_loss: {info['ce_loss']:.4f}")
             optim.step()
             lr_scheduler.step()
             global_step += 1
@@ -176,7 +184,8 @@ if __name__ == "__main__":
 
                     init_noise = torch.randint(0, N, (16, max_length)).to(device)
 
-                    outputs = d3pm.sample_with_image_sequence(
+                    sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
+                    outputs = sample_fn(
                         init_noise, None, stride=40
                     )
                     gen_outputs = []
@@ -210,4 +219,4 @@ if __name__ == "__main__":
 
                 if global_step % args.ckpt_freq == 1:
                     accelerator.save_state(checkpoint_dir / f"step_{global_step}")
-                    print(f"Model saved at {global_step}")
+                    accelerator.print(f"Model saved at {global_step}")
