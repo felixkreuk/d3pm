@@ -94,25 +94,25 @@ if __name__ == "__main__":
     log_dir = Path(args.dump_dir) / "logdir"
     accelerator = Accelerator(mixed_precision=args.mixed_precision, log_with="tensorboard", project_dir=args.dump_dir)
     device = accelerator.device
+    accelerator.init_trackers("d3pm", config=vars(args))
 
     N = 256
     max_length = 512
-    num_train_epochs = 5
+    num_train_epochs = 51
 
     d3pm = D3PM(
         DDiT_Llama(N, dim=512, n_layers=6), 1000, num_classes=N, hybrid_loss_coeff=0.0
     )
 
     accelerator.print(f"Total Param Count: {sum([p.numel() for p in d3pm.x0_model.parameters()])}")
-    with accelerator.main_process_first():
-        dataset = WikiTextDataset(max_length=max_length, debug=False)
+    dataset = WikiTextDataset(max_length=max_length, debug=False)
     dataloader = DataLoader(dataset, batch_size=256, shuffle=True, num_workers=8)
     optim = torch.optim.AdamW(d3pm.x0_model.parameters(), lr=2e-4)
 
     lr_scheduler = get_scheduler(
         name="linear",
         optimizer=optim,
-        num_warmup_steps=100,
+        num_warmup_steps=1000,
         num_training_steps=num_train_epochs * math.ceil(len(dataloader)),
     )
 
@@ -174,6 +174,15 @@ if __name__ == "__main__":
 
             if global_step % args.log_steps == 0:
                 accelerator.print(f"epoch: {i}, step: {global_step}/{len(dataloader)}, loss: {loss_ema:.4f}, norm: {norm:.4f}, param_norm: {param_norm:.4f}, vb_loss: {info['vb_loss']:.4f}, ce_loss: {info['ce_loss']:.4f}")
+                accelerator.log({
+                    "train_loss": loss_ema,
+                    "norm": norm,
+                    "param_norm": param_norm,
+                    "vb_loss": info['vb_loss'],
+                    "ce_loss": info['ce_loss'],
+                    "lr": lr_scheduler.get_last_lr()[0],
+                }, step=global_step)
+
             optim.step()
             lr_scheduler.step()
             global_step += 1
