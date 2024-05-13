@@ -126,10 +126,9 @@ if __name__ == "__main__":
         # if a ckpt exists
         if path:
             # Extract `step_{i}`
-            resume_step = int(path.name.replace("step_", ""))
-            start_epoch = resume_step // len(dataloader)
-            resume_step -= start_epoch * len(dataloader)
-            global_step = resume_step
+            global_step = int(path.name.replace("step_", ""))
+            start_epoch = global_step // len(dataloader)
+            resume_step = global_step - start_epoch * len(dataloader)
             accelerator.load_state(path)
             accelerator.print(f"loaded ctkp from: {path}")
     accelerator.print(f"step: {global_step}, epoch: {start_epoch}")
@@ -141,7 +140,6 @@ if __name__ == "__main__":
         if args.resume and i == start_epoch and resume_step is not None:
             # We need to skip steps until we reach the resumed step
             active_dataloader = accelerator.skip_first_batches(dataloader, resume_step)
-            global_step += resume_step
         else:
             # After the first iteration though, we need to go back to the original dataloader
             active_dataloader = dataloader
