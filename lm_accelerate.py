@@ -25,14 +25,15 @@ class WikiTextDataset(Dataset):
         self.vernum = vernum
         # self.dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
         # self.dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
-        self.dataset = load_dataset("Skylion007/openwebtext", cache_dir="/fsx-codegen/felixkreuk/datasets/hf")
+        self.dataset = load_dataset("Skylion007/openwebtext")['train']
         self.tokenizer = tokenizer
         self.max_length = max_length
 
     def __len__(self):
-        return (
-            int(len(self.dataset) * 0.1) if (self.vernum == 103) else len(self.dataset)
-        )
+        return len(self.dataset)
+        # return (
+        #     int(len(self.dataset) * 0.1) if (self.vernum == 103) else len(self.dataset)
+        # )
 
     def __getitem__(self, idx):
         text = self.dataset[idx]["text"]
@@ -172,7 +173,7 @@ if __name__ == "__main__":
                 loss_ema = 0.99 * loss_ema + 0.01 * loss.item()
 
             if global_step % args.log_steps == 0:
-                accelerator.print(f"epoch: {i}, step: {global_step}, loss: {loss_ema:.4f}, norm: {norm:.4f}, param_norm: {param_norm:.4f}, vb_loss: {info['vb_loss']:.4f}, ce_loss: {info['ce_loss']:.4f}")
+                accelerator.print(f"epoch: {i}, step: {global_step}/{len(dataloader)}, loss: {loss_ema:.4f}, norm: {norm:.4f}, param_norm: {param_norm:.4f}, vb_loss: {info['vb_loss']:.4f}, ce_loss: {info['ce_loss']:.4f}")
             optim.step()
             lr_scheduler.step()
             global_step += 1
