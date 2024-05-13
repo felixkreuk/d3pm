@@ -91,10 +91,11 @@ if __name__ == "__main__":
         raise ValueError("The dump directory already exists.")
 
     checkpoint_dir = Path(args.dump_dir) / "checkpoints"
-    log_dir = Path(args.dump_dir) / "logdir"
+    checkpoint_dir.mkdir(exist_ok=True, parents=True)
+    (Path(args.dump_dir) / "gen").mkdir(exist_ok=True, parents=True)
     accelerator = Accelerator(mixed_precision=args.mixed_precision, log_with="tensorboard", project_dir=args.dump_dir)
     device = accelerator.device
-    accelerator.init_trackers("d3pm", config=vars(args))
+    accelerator.init_trackers("tb", config=vars(args))
 
     N = 256
     max_length = 512
@@ -125,9 +126,8 @@ if __name__ == "__main__":
         # Get the most recent checkpoint
         dirs = [f for f in checkpoint_dir.iterdir() if f.is_dir()]
         dirs.sort(key=os.path.getctime)
-        path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
-        # if a ckpt exists
-        if path:
+        if dirs:
+            path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
             # Extract `step_{i}`
             global_step = int(path.name.replace("step_", ""))
             start_epoch = global_step // len(dataloader)
@@ -191,41 +191,42 @@ if __name__ == "__main__":
                 d3pm.eval()
 
                 with torch.no_grad():
+                    if accelerator.is_main_process:
+                        accelerator.print("evaluating...")
+                        init_noise = torch.randint(0, N, (16, max_length)).to(device)
 
-                    init_noise = torch.randint(0, N, (16, max_length)).to(device)
-
-                    sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
-                    outputs = sample_fn(
-                        init_noise, None, stride=40
-                    )
-                    gen_outputs = []
-                    total = 0
-                    # back to sentence, byte to utf-8
-                    for _i in range(16):
-                        sent = outputs[-1][_i].cpu().tolist()
-                        correctly_parsed = True
-                        try:
-                            sent = b"".join([bytes([i]) for i in sent]).decode("utf-8")
-                        except:
-                            # if there is error, just unicodec
-                            correctly_parsed = False
-                            sent = "".join([chr(i) for i in sent])
-                        sent = (
-                            f"[{_i}] Sample Correctly parsed: "
-                            + str(correctly_parsed)
-                            + "\n"
-                            + sent
+                        sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
+                        outputs = sample_fn(
+                            init_noise, None, stride=40
                         )
-                        total += 1 if correctly_parsed else 0
+                        gen_outputs = []
+                        total = 0
+                        # back to sentence, byte to utf-8
+                        for _i in range(16):
+                            sent = outputs[-1][_i].cpu().tolist()
+                            correctly_parsed = True
+                            try:
+                                sent = b"".join([bytes([i]) for i in sent]).decode("utf-8")
+                            except:
+                                # if there is error, just unicodec
+                                correctly_parsed = False
+                                sent = "".join([chr(i) for i in sent])
+                            sent = (
+                                f"[{_i}] Sample Correctly parsed: "
+                                + str(correctly_parsed)
+                                + "\n"
+                                + sent
+                            )
+                            total += 1 if correctly_parsed else 0
 
-                        gen_outputs.append(sent)
+                            gen_outputs.append(sent)
 
-                    accelerator.print(sent)
-                    # make a nice html to show the generated outputs
-                    html_formatted = "---\n".join(gen_outputs)
-                    with open(Path(args.dump_dir) / "gen" / f"step_{global_step}.txt") as f:
-                        f.write(html_formatted)
-                    # log text
+                        # accelerator.print(sent)
+                        html_formatted = "---\n".join(gen_outputs)
+                        with open(Path(args.dump_dir) / "gen" / f"step_{global_step}.txt", "w") as f:
+                            f.write(html_formatted)
+                    accelerator.wait_for_everyone()
+                    accelerator.print("done")
 
                 d3pm.train()
 
