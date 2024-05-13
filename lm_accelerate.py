@@ -23,8 +23,9 @@ class WikiTextDataset(Dataset):
         else:
             vernum = 103
         self.vernum = vernum
-        self.dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
+        # self.dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
         # self.dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
+        self.dataset = load_dataset("Skylion007/openwebtext", cache_dir="/fsx-codegen/felixkreuk/datasets/hf")
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -102,7 +103,8 @@ if __name__ == "__main__":
     )
 
     accelerator.print(f"Total Param Count: {sum([p.numel() for p in d3pm.x0_model.parameters()])}")
-    dataset = WikiTextDataset(max_length=max_length, debug=False)
+    with accelerator.main_process_first():
+        dataset = WikiTextDataset(max_length=max_length, debug=False)
     dataloader = DataLoader(dataset, batch_size=256, shuffle=True, num_workers=8)
     optim = torch.optim.AdamW(d3pm.x0_model.parameters(), lr=2e-4)
 
