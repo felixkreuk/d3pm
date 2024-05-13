@@ -22,7 +22,8 @@ class WikiTextDataset(Dataset):
         else:
             vernum = 103
         self.vernum = vernum
-        self.dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
+        self.dataset = load_dataset("wikitext", "wikitext-103-raw-v1", split="train")
+        # self.dataset = load_dataset("wikimedia/wikipedia", "20231101.en", split="train")
         self.tokenizer = tokenizer
         self.max_length = max_length
 
@@ -77,15 +78,15 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--resume",
-        type=str,
-        default=None,
+        action='store_true',
         help="If the training should continue from a checkpoint folder.",
     )
     args = parser.parse_args()
 
-    accelerator = Accelerator(mixed_precision=args.mixed_precision)
-    device = accelerator.device
     checkpoint_dir = Path(args.dump_dir) / "checkpoints"
+    log_dir = Path(args.dump_dir) / "logdir"
+    accelerator = Accelerator(mixed_precision=args.mixed_precision, log_with="tensorboard", project_dir=args.dump_dir)
+    device = accelerator.device
 
     N = 256
     max_length = 256
@@ -107,32 +108,40 @@ if __name__ == "__main__":
         num_training_steps=num_train_epochs * math.ceil(len(dataloader)),
     )
 
-    d3pm, optim, dataloader, lr_scheduler = Accelerator.prepare(d3pm, optim, dataloader, lr_scheduler)
+    d3pm, optim, dataloader, lr_scheduler = accelerator.prepare(d3pm, optim, dataloader, lr_scheduler)
 
+    global_step = 0
+    start_epoch = 0
+    resume_step = None
     if args.resume:
-        try:
-            # Get the most recent checkpoint
-            dirs = [f.name for f in os.scandir(checkpoint_dir) if f.is_dir()]
-            dirs.sort(key=os.path.getctime)
-            path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
+        # Get the most recent checkpoint
+        dirs = [f for f in checkpoint_dir.iterdir() if f.is_dir()]
+        dirs.sort(key=os.path.getctime)
+        path = dirs[-1]  # Sorts folders by date modified, most recent checkpoint is the last
+        # if a ckpt exists
+        if path:
             # Extract `step_{i}`
-            training_difference = os.path.splitext(path)[0]
-
-            resume_step = int(training_difference.replace("step_", ""))
+            resume_step = int(path.name.replace("step_", ""))
             start_epoch = resume_step // len(dataloader)
             resume_step -= start_epoch * len(dataloader)
             global_step = resume_step
-        except:
-            resume_step = 0
-            start_epoch = 0
-            global_step = 0
+            accelerator.load_state(path)
+            accelerator.print("loaded ctkp from: {path}")
     accelerator.print(f"step: {global_step}, epoch: {start_epoch}")
 
     d3pm.train()
 
     for i in range(start_epoch, num_train_epochs):
 
-        pbar = tqdm(dataloader)
+        if args.resume and i == start_epoch and resume_step is not None:
+            # We need to skip steps until we reach the resumed step
+            active_dataloader = accelerator.skip_first_batches(dataloader, resume_step)
+            global_step += resume_step
+        else:
+            # After the first iteration though, we need to go back to the original dataloader
+            active_dataloader = dataloader
+
+        pbar = tqdm(active_dataloader, total=len(dataloader), initial=resume_step)
         loss_ema = None
         for x in pbar:
             optim.zero_grad()
@@ -152,15 +161,6 @@ if __name__ == "__main__":
                 loss_ema = loss.item()
             else:
                 loss_ema = 0.99 * loss_ema + 0.01 * loss.item()
-
-            if global_step % 10 == 0:
-                wandb.log(
-                    {
-                        "train_loss": loss,
-                        "train_grad_norm": norm,
-                        "train_param_norm": param_norm,
-                    }
-                )
 
             pbar.set_description(
                 f"loss: {loss_ema:.4f}, norm: {norm:.4f}, param_norm: {param_norm:.4f}, vb_loss: {info['vb_loss']:.4f}, ce_loss: {info['ce_loss']:.4f}"
@@ -209,7 +209,5 @@ if __name__ == "__main__":
                 d3pm.train()
 
                 if global_step % args.ckpt_freq == 1:
-                    torch.save(d3pm.state_dict(), f"ckpt/d3pm_wiki_{global_step}.pth")
                     accelerator.save_state(checkpoint_dir / f"step_{global_step}")
-
                     print(f"Model saved at {global_step}")
