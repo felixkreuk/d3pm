@@ -95,7 +95,7 @@ if __name__ == "__main__":
     device = accelerator.device
 
     N = 256
-    max_length = 256
+    max_length = 512
     num_train_epochs = 5
 
     d3pm = D3PM(
