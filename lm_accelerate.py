@@ -222,7 +222,9 @@ if __name__ == "__main__":
 
                     accelerator.print(sent)
                     # make a nice html to show the generated outputs
-                    html_formatted = "<br>".join(gen_outputs)
+                    html_formatted = "---\n".join(gen_outputs)
+                    with open(Path(args.dump_dir) / "gen" / f"step_{global_step}.txt") as f:
+                        f.write(html_formatted)
                     # log text
 
                 d3pm.train()
