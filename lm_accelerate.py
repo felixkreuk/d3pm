@@ -198,16 +198,13 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     if accelerator.is_main_process:
                         accelerator.print("evaluating...")
+                        total = 0
+                        gen_outputs = []
+                        sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
                         for j in range(EVAL_SAMPLES // EVAL_BATCH):
                             accelerator.print(f"batch: {j}/{EVAL_SAMPLES // EVAL_BATCH}")
                             init_noise = torch.randint(0, N, (EVAL_BATCH, max_length)).to(device)
-
-                            sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
-                            outputs = sample_fn(
-                                init_noise, None, stride=40
-                            )
-                            gen_outputs = []
-                            total = 0
+                            outputs = sample_fn(init_noise, None, stride=40)
                             # back to sentence, byte to utf-8
                             for _i in range(EVAL_BATCH):
                                 sent = outputs[-1][_i].cpu().tolist()
