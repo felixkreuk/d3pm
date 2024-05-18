@@ -99,16 +99,19 @@ if __name__ == "__main__":
     (Path(args.dump_dir) / "gen").mkdir(exist_ok=True, parents=True)
 
     N = 256
+    EVAL_SAMPLES = 1000
+    EVAL_BATCH = 16
     max_length = 512
     num_train_epochs = 51
+    batch_size = 128
 
     d3pm = D3PM(
-        DDiT_Llama(N, dim=512, n_layers=6), 1000, num_classes=N, hybrid_loss_coeff=0.0
+        DDiT_Llama(N, dim=768, n_layers=14), 1000, num_classes=N, hybrid_loss_coeff=0.0
     )
 
-    accelerator.print(f"Total Param Count: {sum([p.numel() for p in d3pm.x0_model.parameters()])}")
+    accelerator.print(f"Total Param Count: {sum([p.numel() for p in d3pm.x0_model.parameters()]):,}")
     dataset = WikiTextDataset(max_length=max_length, debug=False)
-    dataloader = DataLoader(dataset, batch_size=256, shuffle=True, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=8)
     optim = torch.optim.AdamW(d3pm.x0_model.parameters(), lr=2e-4)
 
     lr_scheduler = get_scheduler(
@@ -194,33 +197,35 @@ if __name__ == "__main__":
                 with torch.no_grad():
                     if accelerator.is_main_process:
                         accelerator.print("evaluating...")
-                        init_noise = torch.randint(0, N, (16, max_length)).to(device)
+                        for j in range(EVAL_SAMPLES // EVAL_BATCH):
+                            accelerator.print(f"batch: {j}/{EVAL_SAMPLES // EVAL_BATCH}")
+                            init_noise = torch.randint(0, N, (EVAL_BATCH, max_length)).to(device)
 
-                        sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
-                        outputs = sample_fn(
-                            init_noise, None, stride=40
-                        )
-                        gen_outputs = []
-                        total = 0
-                        # back to sentence, byte to utf-8
-                        for _i in range(16):
-                            sent = outputs[-1][_i].cpu().tolist()
-                            correctly_parsed = True
-                            try:
-                                sent = b"".join([bytes([i]) for i in sent]).decode("utf-8")
-                            except:
-                                # if there is error, just unicodec
-                                correctly_parsed = False
-                                sent = "".join([chr(i) for i in sent])
-                            sent = (
-                                f"[{_i}] Sample Correctly parsed: "
-                                + str(correctly_parsed)
-                                + "\n"
-                                + sent
+                            sample_fn = d3pm.module.sample_with_image_sequence if isinstance (d3pm, DDP) else d3pm.sample_with_image_sequence
+                            outputs = sample_fn(
+                                init_noise, None, stride=40
                             )
-                            total += 1 if correctly_parsed else 0
+                            gen_outputs = []
+                            total = 0
+                            # back to sentence, byte to utf-8
+                            for _i in range(EVAL_BATCH):
+                                sent = outputs[-1][_i].cpu().tolist()
+                                correctly_parsed = True
+                                try:
+                                    sent = b"".join([bytes([i]) for i in sent]).decode("utf-8")
+                                except:
+                                    # if there is error, just unicodec
+                                    correctly_parsed = False
+                                    sent = "".join([chr(i) for i in sent])
+                                # sent = (
+                                #     f"[{_i}] Sample Correctly parsed: "
+                                #     + str(correctly_parsed)
+                                #     + "\n"
+                                #     + sent
+                                # )
+                                total += 1 if correctly_parsed else 0
 
-                            gen_outputs.append(sent)
+                                gen_outputs.append(sent)
 
                         # accelerator.print(sent)
                         html_formatted = "---\n".join(gen_outputs)
