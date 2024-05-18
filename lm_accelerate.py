@@ -2,6 +2,7 @@ import os
 import math
 import argparse
 from pathlib import Path
+import json
 
 import torch
 from datasets import load_dataset
@@ -225,10 +226,10 @@ if __name__ == "__main__":
                                 # )
                                 total += 1 if correctly_parsed else 0
 
-                                gen_outputs.append(sent)
+                                gen_outputs.append(json.dumps({"gen": sent}))
 
                         # accelerator.print(sent)
-                        html_formatted = "---\n".join(gen_outputs)
+                        html_formatted = "\n".join(gen_outputs)
                         with open(Path(args.dump_dir) / "gen" / f"step_{global_step}.txt", "w") as f:
                             f.write(html_formatted)
                     accelerator.wait_for_everyone()
